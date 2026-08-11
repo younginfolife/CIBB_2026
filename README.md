@@ -68,20 +68,14 @@ down. Everything you save elsewhere (for example in `/home/rstudio`) is lost.
 
 ### Apple Silicon (M1/M2/M3/M4) and other ARM machines
 
-The published images are built for **amd64**. On an ARM Mac they run under
-emulation: RStudio behaves normally, heavy computations are slower. The launcher
-detects this, prints a warning and passes `--platform linux/amd64` so the
-behaviour is predictable. Nothing to do.
+Both images are published as multi-arch manifest lists for **linux/amd64 and
+linux/arm64**, so on an ARM Mac `docker pull` picks the native arm64 image by
+itself: no emulation, nothing to configure. The launcher prints the architecture
+it detected.
 
-For a native ARM image, build it once locally (long: on arm64 there are no
-precompiled CRAN binaries, every package is compiled from source):
-
-```bash
-./start.sh --build
-```
-
-The `--dind` variant under emulation is unreliable (an emulated `dockerd` inside
-an emulated container): on ARM either build it natively or skip it.
+If for any reason only the amd64 image is available, the launcher notices, warns
+and passes `--platform linux/amd64` so the behaviour stays predictable — it runs
+emulated, slower but working.
 
 ### Launcher options
 
@@ -121,6 +115,7 @@ from the CRAN Archive (see `docker/install_packages.R`).
 | R | 4.6.1, the current release (2026-06-24), from `rocker/rstudio:4.6.1` |
 | Bioconductor | the release matching R 4.6.x, picked by BiocManager |
 | Docker (dind variant) | from the official `docker:29-dind` image |
+| Architectures | linux/amd64 and linux/arm64 (Apple Silicon) |
 
 R is **not** the apt/Ubuntu one: the rocker images install exactly the version of
 the tag. The full package version manifest is inside the image:
@@ -242,6 +237,21 @@ The images are built and published by the GitHub Action in
 `.github/workflows/docker-build.yml`, which names them after the repository
 itself (`ghcr.io/<owner>/<repository>`, lowercased). No need to edit the
 workflow, no secrets required: `GITHUB_TOKEN` is enough.
+
+The workflow has four jobs: each architecture is built on a **native** runner
+(`ubuntu-latest` for amd64, `ubuntu-24.04-arm` for arm64, both free for public
+repositories — no QEMU), pushed by digest, and then a merge job assembles the
+multi-arch manifest list. Same for the dind variant.
+
+Build times: amd64 about one hour, arm64 several hours, because Posit Package
+Manager serves precompiled binaries for amd64 only and on arm64 every R package
+is compiled from source. Both are cached between runs, so later builds are much
+faster. `arm64` images of `rocker/rstudio` are marked experimental upstream; if
+the arm64 job ever breaks, the amd64 one is independent (`fail-fast: false`) and
+students on Intel machines are unaffected.
+
+From **Actions > Run workflow** you can choose to build only one architecture
+(`amd64 only` / `arm64 only`) and whether to include the dind variant.
 
 One-time tasks:
 
