@@ -31,7 +31,28 @@ param(
     [switch] $NoBrowser
 )
 
-$ErrorActionPreference = "Stop"
+# IMPORTANT: must stay "Continue". Docker writes warnings to stderr (e.g.
+# "WARNING: DOCKER_INSECURE_NO_IPTABLES_RAW is set") and with "Stop" PowerShell
+# turns any native stderr output into a terminating NativeCommandError, killing
+# the script on a harmless warning. Every docker call below checks $LASTEXITCODE
+# explicitly instead.
+$ErrorActionPreference = "Continue"
+
+# --- docker helpers --------------------------------------------------------
+# Run docker discarding every stream; returns the exit code.
+function Invoke-DockerQuiet {
+    $null = & docker @args 2>&1
+    return $LASTEXITCODE
+}
+
+# Run docker and return its output as clean lines, dropping warnings.
+function Get-DockerLines {
+    $out = & docker @args 2>$null
+    if ($null -eq $out) { return @() }
+    return @($out |
+        ForEach-Object { "$_".Trim() } |
+        Where-Object { $_ -ne "" -and $_ -notmatch '^(WARNING|DEPRECATED)' })
+}
 
 # --- where am I ? ----------------------------------------------------------
 if ($PSScriptRoot) {
@@ -98,18 +119,17 @@ if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
     Die "Docker is not installed or not in PATH.`nInstall Docker Desktop: https://www.docker.com/products/docker-desktop/"
 }
 
-docker info *> $null
-if ($LASTEXITCODE -ne 0) {
+if ((Invoke-DockerQuiet info) -ne 0) {
     Die "The Docker daemon is not responding.`nStart Docker Desktop and wait until it reports 'Engine running', then run this script again."
 }
 
 # --- secondary actions -----------------------------------------------------
-$existing = @(docker ps -a --format "{{.Names}}") | ForEach-Object { "$_".Trim() }
+$existing = Get-DockerLines ps -a --format "{{.Names}}"
 
 if ($Stop) {
     if ($existing -contains $ContainerName) {
         Write-Info "stopping $ContainerName ..."
-        docker rm -f $ContainerName *> $null
+        $null = Invoke-DockerQuiet rm -f $ContainerName
         Write-Info "done."
     } else {
         Write-Info "no container named $ContainerName."
@@ -179,7 +199,7 @@ function Test-PortInUse {
 }
 
 if (Test-PortInUse $Port) {
-    $running = docker ps --format "{{.Names}} {{.Ports}}"
+    $running = Get-DockerLines ps --format "{{.Names}} {{.Ports}}"
     if ($running -match "^$ContainerName .*:$Port->") {
         Write-Info "the container $ContainerName is already running on port $Port."
         Write-Info "open http://localhost:$Port   (stop it with: .\start.ps1 -Stop)"
@@ -191,7 +211,7 @@ if (Test-PortInUse $Port) {
 # --- remove a stale container with the same name ---------------------------
 if ($existing -contains $ContainerName) {
     Write-Info "removing the previous container $ContainerName ..."
-    docker rm -f $ContainerName *> $null
+    $null = Invoke-DockerQuiet rm -f $ContainerName
 }
 
 # --- build or pull the image ----------------------------------------------
@@ -207,8 +227,7 @@ if ($Build) {
         if ($LASTEXITCODE -ne 0) { Die "docker build (dind) failed." }
     }
 } else {
-    docker image inspect $Image *> $null
-    if ($LASTEXITCODE -ne 0) {
+    if ((Invoke-DockerQuiet image inspect $Image) -ne 0) {
         Write-Info "pulling $Image (several GB, be patient) ..."
         docker pull $Image
         if ($LASTEXITCODE -ne 0) {
@@ -239,22 +258,28 @@ if ($Dind) {
 $runArgs += $Image
 
 Write-Info "starting the container ..."
-& docker @runArgs *> $null
-if ($LASTEXITCODE -ne 0) { Die "docker run failed." }
+$runOut = & docker @runArgs 2>&1
+if ($LASTEXITCODE -ne 0) {
+    Write-Err "docker run failed:"
+    $runOut | ForEach-Object { Write-Host "  $_" }
+    Read-Host "Press ENTER to close"
+    exit 1
+}
 
 # --- wait for RStudio to answer -------------------------------------------
 Write-Info "waiting for RStudio Server ..."
 $ok = $false
 for ($i = 0; $i -lt 45; $i++) {
-    $alive = @(docker ps --format "{{.Names}}") | ForEach-Object { "$_".Trim() }
+    $alive = Get-DockerLines ps --format "{{.Names}}"
     if ($alive -notcontains $ContainerName) {
         Write-Err "the container stopped unexpectedly. Logs:"
-        docker logs $ContainerName
+        & docker logs $ContainerName 2>&1 | ForEach-Object { Write-Host "  $_" }
         Read-Host "Press ENTER to close"
         exit 1
     }
     try {
-        Invoke-WebRequest -Uri "http://localhost:$Port" -UseBasicParsing -TimeoutSec 3 *> $null
+        $null = Invoke-WebRequest -Uri "http://localhost:$Port" -UseBasicParsing `
+                    -TimeoutSec 3 -ErrorAction Stop
         $ok = $true
         break
     } catch { Start-Sleep -Seconds 2 }
