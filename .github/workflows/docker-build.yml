@@ -1,8 +1,18 @@
 name: build-and-push-images
 
-# Builds the two images and pushes them to the GitHub Container Registry
-# (ghcr.io/<owner>/rnaseq-nets:latest and :dind).
-# Nothing to configure: GITHUB_TOKEN is enough to push to ghcr.io.
+# Builds the two images for linux/amd64 and linux/arm64 and publishes them to
+# the GitHub Container Registry as multi-arch manifest lists:
+#   ghcr.io/<owner>/<repository>:latest   (RStudio + R packages)
+#   ghcr.io/<owner>/<repository>:dind     (+ Docker Engine inside)
+#
+# Each architecture is built on a NATIVE runner (no QEMU): ubuntu-latest for
+# amd64, ubuntu-24.04-arm for arm64. Per-arch images are pushed by digest, then
+# a merge job assembles the manifest list, so `docker pull` picks the right
+# architecture automatically on Intel/AMD machines and on Apple Silicon.
+#
+# Note: on arm64 there are no precompiled CRAN binaries (Posit Package Manager
+# serves them for amd64 only), so every R package is compiled from source and
+# the arm64 job takes several hours. It is cached between runs.
 
 on:
   push:
@@ -21,6 +31,11 @@ on:
       - 'docker/**'
   workflow_dispatch:
     inputs:
+      platforms:
+        description: 'Which architectures to build'
+        type: choice
+        default: 'both'
+        options: [ 'both', 'amd64 only', 'arm64 only' ]
       build_dind:
         description: 'Also build the docker-in-docker variant'
         type: boolean
@@ -28,37 +43,57 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  R_VERSION: "4.6.1"          # current R release (2026-06-24)
+  R_VERSION: "4.6.1"           # current R release (2026-06-24)
   DIND_IMAGE: "docker:29-dind" # official docker-in-docker image
 
 jobs:
-  # -------------------------------------------------------------------------
+  # =========================================================================
+  # 1. base image, one job per architecture, pushed by digest
+  # =========================================================================
   base:
-    name: base image (RStudio + R packages)
-    runs-on: ubuntu-latest
-    timeout-minutes: 330
+    name: base ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 350
     permissions:
       contents: read
       packages: write
-    outputs:
-      image: ${{ steps.out.outputs.image }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
     steps:
+      - name: Skip this architecture?
+        id: skip
+        run: |
+          want="${{ github.event.inputs.platforms }}"
+          case "$want" in
+            "amd64 only") [ "${{ matrix.arch }}" = "amd64" ] || echo "skip=true" >> "$GITHUB_OUTPUT" ;;
+            "arm64 only") [ "${{ matrix.arch }}" = "arm64" ] || echo "skip=true" >> "$GITHUB_OUTPUT" ;;
+          esac
+
       - name: Checkout
+        if: steps.skip.outputs.skip != 'true'
         uses: actions/checkout@v4
 
-      # ghcr.io requires a lowercase name; the image is named after the repo
-      # itself (owner/repository), so nothing has to be edited here.
+      # ghcr.io requires a lowercase name; the image is named after the
+      # repository itself, so nothing has to be edited here.
       - name: Compute the image name
         id: img
+        if: steps.skip.outputs.skip != 'true'
         run: |
-          echo "name=${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
           echo "ref=${REGISTRY}/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
-          echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
         env:
           REGISTRY: ${{ env.REGISTRY }}
 
       # the image is several GB: the default runner disk is not enough
       - name: Free disk space on the runner
+        if: steps.skip.outputs.skip != 'true'
         run: |
           echo "before:"; df -h /
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
@@ -68,10 +103,97 @@ jobs:
           echo "after:"; df -h /
 
       - name: Set up Docker Buildx
+        if: steps.skip.outputs.skip != 'true'
         uses: docker/setup-buildx-action@v3
 
       - name: Log in to ghcr.io
-        if: github.event_name != 'pull_request'
+        if: steps.skip.outputs.skip != 'true' && github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build (and push by digest)
+        id: build
+        if: steps.skip.outputs.skip != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: ${{ matrix.platform }}
+          build-args: |
+            R_VERSION=${{ env.R_VERSION }}
+          load: ${{ github.event_name == 'pull_request' }}
+          tags: ${{ github.event_name == 'pull_request' && format('local/base:{0}', matrix.arch) || '' }}
+          outputs: ${{ github.event_name != 'pull_request' && format('type=image,name={0},push-by-digest=true,name-canonical=true,push=true', steps.img.outputs.ref) || '' }}
+          cache-from: type=gha,scope=base-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=base-${{ matrix.arch }}
+          provenance: false
+
+      # the runner is native for this architecture, so the image can be run
+      - name: Smoke test (all packages must load)
+        if: steps.skip.outputs.skip != 'true'
+        run: |
+          set -e
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            IMG="local/base:${{ matrix.arch }}"
+          else
+            IMG="${{ steps.img.outputs.ref }}@${{ steps.build.outputs.digest }}"
+            docker pull "$IMG"
+          fi
+          docker run --rm -v "$PWD/scripts:/scripts:ro" "$IMG" \
+            Rscript /scripts/00_check_installation.R
+
+      - name: Save the digest
+        if: steps.skip.outputs.skip != 'true' && github.event_name != 'pull_request'
+        run: |
+          mkdir -p /tmp/digests
+          echo -n "${{ steps.build.outputs.digest }}" \
+            > "/tmp/digests/${{ matrix.arch }}"
+
+      - name: Upload the digest
+        if: steps.skip.outputs.skip != 'true' && github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: digest-base-${{ matrix.arch }}
+          path: /tmp/digests/*
+          retention-days: 1
+
+  # =========================================================================
+  # 2. assemble the multi-arch manifest list for the base image
+  # =========================================================================
+  merge-base:
+    name: manifest list (base)
+    needs: base
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      ref: ${{ steps.img.outputs.ref }}
+      sha_tag: ${{ steps.img.outputs.sha_tag }}
+    steps:
+      - name: Compute the image name
+        id: img
+        run: |
+          echo "ref=${REGISTRY}/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+          echo "sha_tag=sha-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+        env:
+          REGISTRY: ${{ env.REGISTRY }}
+
+      - name: Download the digests
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digest-base-*
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to ghcr.io
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
@@ -86,73 +208,123 @@ jobs:
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=ref,event=branch
-            type=ref,event=pr
             type=semver,pattern={{version}}
             type=sha,format=short
 
-      - name: Build (and push) the base image
-        id: build
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: ./Dockerfile
-          build-args: |
-            R_VERSION=${{ env.R_VERSION }}
-          push: ${{ github.event_name != 'pull_request' }}
-          load: ${{ github.event_name == 'pull_request' }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          provenance: false
-
-      - name: Smoke test (all packages must load)
+      - name: Create and push the manifest list
+        working-directory: /tmp/digests
         run: |
-          set -e
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            IMG=$(echo "${{ steps.meta.outputs.tags }}" | head -n1)
-          else
-            IMG="${{ steps.img.outputs.ref }}:sha-${{ steps.img.outputs.sha }}"
-            docker pull "$IMG"
-          fi
-          docker run --rm -v "$PWD/scripts:/scripts:ro" "$IMG" \
-            Rscript /scripts/00_check_installation.R
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(for f in *; do printf '%s@sha256:%s ' "${{ steps.img.outputs.ref }}" "$(cat "$f" | sed 's/^sha256://')"; done)
 
-      - name: Export the image reference
-        id: out
-        run: |
-          echo "image=${{ steps.img.outputs.ref }}:sha-${{ steps.img.outputs.sha }}" >> "$GITHUB_OUTPUT"
+      - name: Inspect
+        run: docker buildx imagetools inspect "${{ steps.img.outputs.ref }}:${{ steps.img.outputs.sha_tag }}"
 
-  # -------------------------------------------------------------------------
+  # =========================================================================
+  # 3. docker-in-docker variant, one job per architecture
+  # =========================================================================
   dind:
-    name: docker-in-docker variant
-    needs: base
-    if: github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
+    name: dind ${{ matrix.arch }}
+    needs: merge-base
+    if: github.event_name != 'pull_request' && github.event.inputs.build_dind != 'false'
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     permissions:
       contents: read
       packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
     steps:
+      - name: Skip this architecture?
+        id: skip
+        run: |
+          want="${{ github.event.inputs.platforms }}"
+          case "$want" in
+            "amd64 only") [ "${{ matrix.arch }}" = "amd64" ] || echo "skip=true" >> "$GITHUB_OUTPUT" ;;
+            "arm64 only") [ "${{ matrix.arch }}" = "arm64" ] || echo "skip=true" >> "$GITHUB_OUTPUT" ;;
+          esac
+
       - name: Checkout
+        if: steps.skip.outputs.skip != 'true'
         uses: actions/checkout@v4
 
-      # ghcr.io requires a lowercase name; the image is named after the repo
-      # itself (owner/repository), so nothing has to be edited here.
-      - name: Compute the image name
-        id: img
-        run: |
-          echo "name=${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
-          echo "ref=${REGISTRY}/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
-          echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
-        env:
-          REGISTRY: ${{ env.REGISTRY }}
-
       - name: Free disk space on the runner
+        if: steps.skip.outputs.skip != 'true'
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
                       "$AGENT_TOOLSDIRECTORY" || true
           df -h /
+
+      - name: Set up Docker Buildx
+        if: steps.skip.outputs.skip != 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to ghcr.io
+        if: steps.skip.outputs.skip != 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build (and push by digest)
+        id: build
+        if: steps.skip.outputs.skip != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile.dind
+          platforms: ${{ matrix.platform }}
+          build-args: |
+            BASE_IMAGE=${{ needs.merge-base.outputs.ref }}:${{ needs.merge-base.outputs.sha_tag }}
+            DIND_IMAGE=${{ env.DIND_IMAGE }}
+          outputs: type=image,name=${{ needs.merge-base.outputs.ref }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=dind-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=dind-${{ matrix.arch }}
+          provenance: false
+
+      - name: Save the digest
+        if: steps.skip.outputs.skip != 'true'
+        run: |
+          mkdir -p /tmp/digests
+          echo -n "${{ steps.build.outputs.digest }}" \
+            > "/tmp/digests/${{ matrix.arch }}"
+
+      - name: Upload the digest
+        if: steps.skip.outputs.skip != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: digest-dind-${{ matrix.arch }}
+          path: /tmp/digests/*
+          retention-days: 1
+
+  # =========================================================================
+  # 4. assemble the multi-arch manifest list for the dind image
+  # =========================================================================
+  merge-dind:
+    name: manifest list (dind)
+    needs: [ merge-base, dind ]
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Download the digests
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digest-dind-*
+          merge-multiple: true
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -168,43 +340,35 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ steps.img.outputs.ref }}
+          images: ${{ needs.merge-base.outputs.ref }}
           tags: |
             type=raw,value=dind,enable={{is_default_branch}}
             type=semver,pattern={{version}}-dind
             type=sha,format=short,prefix=dind-
 
-      - name: Build and push the dind image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: ./Dockerfile.dind
-          build-args: |
-            BASE_IMAGE=${{ needs.base.outputs.image }}
-            DIND_IMAGE=${{ env.DIND_IMAGE }}
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          provenance: false
+      - name: Create and push the manifest list
+        working-directory: /tmp/digests
+        run: |
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(for f in *; do printf '%s@sha256:%s ' "${{ needs.merge-base.outputs.ref }}" "$(cat "$f" | sed 's/^sha256://')"; done)
 
       - name: Summary
         run: |
           {
-            echo "### Images published"
+            echo "### Images published (linux/amd64 + linux/arm64)"
             echo ""
             echo '```'
-            echo "docker pull ${{ steps.img.outputs.ref }}:latest"
-            echo "docker pull ${{ steps.img.outputs.ref }}:dind"
+            echo "docker pull ${{ needs.merge-base.outputs.ref }}:latest"
+            echo "docker pull ${{ needs.merge-base.outputs.ref }}:dind"
             echo '```'
             echo ""
-            echo "Put this line in \`image.conf\` so that the launcher scripts find them:"
+            echo "Line to keep in \`image.conf\`:"
             echo ""
             echo '```'
-            echo "IMAGE_REPO=${{ steps.img.outputs.ref }}"
+            echo "IMAGE_REPO=${{ needs.merge-base.outputs.ref }}"
             echo '```'
             echo ""
-            echo "Remember to set the package visibility to **public**:"
+            echo "If this is the first run, set the package visibility to **public**:"
             echo "repository > Packages > Package settings > Change visibility."
           } >> "$GITHUB_STEP_SUMMARY"
