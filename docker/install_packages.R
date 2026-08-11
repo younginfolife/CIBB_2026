@@ -3,12 +3,22 @@
 ## Preprocessing + reverse engineering stack for the RNA-seq / networks tutorial
 ## ---------------------------------------------------------------------------
 
+ncpus <- max(1L, parallel::detectCores())
+
 options(
   repos = c(CRAN = Sys.getenv("CRAN", "https://cloud.r-project.org")),
-  Ncpus = max(1L, parallel::detectCores()),
+  Ncpus = ncpus,
   warn = 1,
   timeout = 3600
 )
+
+## On arm64 (Apple Silicon, ARM servers) Posit Package Manager does not serve
+## precompiled binaries, so everything is built from source: use all cores.
+arch <- R.version$arch
+message(">>> architecture: ", arch, " | cores: ", ncpus)
+if (!nzchar(Sys.getenv("MAKEFLAGS"))) {
+  Sys.setenv(MAKEFLAGS = paste0("-j", ncpus))
+}
 
 ## --- 1. bootstrap ----------------------------------------------------------
 
@@ -27,9 +37,10 @@ if (nzchar(bioc_version)) {
 message(">>> R           : ", R.version.string)
 message(">>> Bioconductor: ", as.character(BiocManager::version()))
 
-bioc_install <- function(pkg) {
+bioc_install <- function(pkg, configure.args = NULL) {
   args <- list(pkg, update = FALSE, ask = FALSE)
   if (nzchar(bioc_version)) args$version <- bioc_version
+  if (!is.null(configure.args)) args$configure.args <- configure.args
   do.call(BiocManager::install, args)
 }
 
@@ -97,6 +108,12 @@ for (pkg in bioc_pkgs) {
   if (!requireNamespace(pkg, quietly = TRUE)) {
     message(">>> installing Bioconductor package: ", pkg)
     bioc_install(pkg)
+    ## preprocessCore (needed by WGCNA) fails to build with OpenMP threading on
+    ## several non-x86 platforms: retry with threading disabled.
+    if (pkg == "preprocessCore" && !requireNamespace(pkg, quietly = TRUE)) {
+      message(">>> retrying ", pkg, " with --disable-threading")
+      bioc_install(pkg, configure.args = "--disable-threading")
+    }
   } else {
     message(">>> already present: ", pkg)
   }
@@ -172,6 +189,7 @@ manifest <- data.frame(
   row.names = NULL
 )
 manifest <- manifest[order(manifest$package), ]
+manifest$arch <- arch
 utils::write.csv(manifest, "/opt/package_manifest.csv", row.names = FALSE)
 
 sessionInfo()
