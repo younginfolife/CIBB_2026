@@ -72,6 +72,8 @@ PORT="${PORT:-8888}"
 MIN_FREE_GB="${MIN_FREE_GB:-25}"
 R_VERSION="${R_VERSION:-${CONF_R_VERSION:-4.6.1}}"
 DIND_IMAGE="${DIND_IMAGE:-${CONF_DIND_IMAGE:-docker:29-dind}}"
+HOST_ARCH="$(uname -m)"
+PLATFORM="${PLATFORM:-}"   # e.g. PLATFORM=linux/amd64 to force emulation
 
 MODE="standard"
 DO_BUILD=0
@@ -245,11 +247,35 @@ elif ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
     else
         BUILD_HINT="$0 --build"
     fi
+    if [ -n "$PLATFORM" ]; then
+        docker pull --platform "$PLATFORM" "$IMAGE" || die "pull failed for platform $PLATFORM."
+    else
     docker pull "$IMAGE" || die "pull failed.
   Check the image name, or build it locally with:  ${BUILD_HINT}"
+    fi
 else
     info "image already present locally : $IMAGE"
 fi
+
+# --- architecture: Apple Silicon / ARM ------------------------------------
+IMG_ARCH="$(docker image inspect --format '{{.Architecture}}' "$IMAGE" 2>/dev/null || echo unknown)"
+case "$HOST_ARCH" in
+    arm64|aarch64)
+        if [ "$IMG_ARCH" = "amd64" ]; then
+            warn "your CPU is ARM (Apple Silicon / ARM64) but the image is built for amd64.
+       It will run under emulation: RStudio works fine, heavy computations are
+       slower. This is expected and supported.
+       For a native image, build it locally once (long, all R packages are
+       compiled from source):  $0 --build"
+            [ -z "$PLATFORM" ] && PLATFORM="linux/amd64"
+            if [ "$MODE" = "dind" ]; then
+                warn "the --dind variant under emulation is unreliable (an emulated dockerd
+       inside an emulated container). On ARM, build it natively or skip it."
+            fi
+        elif [ "$IMG_ARCH" = "arm64" ]; then
+            info "native ARM64 image, no emulation."
+        fi ;;
+esac
 
 # --- run -------------------------------------------------------------------
 RUN_ARGS=(
@@ -263,6 +289,10 @@ RUN_ARGS=(
     -v "${SHARED_DIR}:/sharedFolder"
     --shm-size=2g
 )
+
+if [ -n "$PLATFORM" ]; then
+    RUN_ARGS+=( --platform "$PLATFORM" )
+fi
 
 # On Linux the container user must have the same uid/gid as the host user,
 # otherwise files written in /sharedFolder end up owned by someone else.

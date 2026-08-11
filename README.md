@@ -66,6 +66,23 @@ counts <- read.delim("data/TestData/Data/insilico_size100_1_multifactorial.tsv",
 Everything you save there stays on your computer after the container is shut
 down. Everything you save elsewhere (for example in `/home/rstudio`) is lost.
 
+### Apple Silicon (M1/M2/M3/M4) and other ARM machines
+
+The published images are built for **amd64**. On an ARM Mac they run under
+emulation: RStudio behaves normally, heavy computations are slower. The launcher
+detects this, prints a warning and passes `--platform linux/amd64` so the
+behaviour is predictable. Nothing to do.
+
+For a native ARM image, build it once locally (long: on arm64 there are no
+precompiled CRAN binaries, every package is compiled from source):
+
+```bash
+./start.sh --build
+```
+
+The `--dind` variant under emulation is unreliable (an emulated `dockerd` inside
+an emulated container): on ARM either build it natively or skip it.
+
 ### Launcher options
 
 | Linux / macOS | Windows | What it does |
