@@ -1,0 +1,83 @@
+# ---------------------------------------------------------------------------
+# Docker-in-Docker variant.
+#
+# The Docker Engine comes from the OFFICIAL docker:dind image (nothing is
+# installed from apt): binaries, cli-plugins, the `dind` cgroup helper and the
+# official `dockerd-entrypoint.sh` are copied from it in a multi-stage build.
+# The host socket is NEVER mounted: this container runs its own dockerd.
+#
+# Why not `FROM docker:dind` directly: that image is Alpine/musl and RStudio
+# Server has no musl build (Posit only ships glibc packages), so R + RStudio
+# cannot run there. Copying the engine out of the dind image gives exactly the
+# same Docker version and the same startup logic on a glibc base.
+#
+#   build: docker build -f Dockerfile.dind \
+#             --build-arg BASE_IMAGE=rnaseq-nets:latest -t rnaseq-nets:dind .
+#   run  : docker run --rm --privileged -p 8888:8787 \
+#             -v "$PWD:/sharedFolder" rnaseq-nets:dind
+# ---------------------------------------------------------------------------
+
+ARG DIND_IMAGE=docker:29-dind
+ARG BASE_IMAGE=rnaseq-nets:latest
+
+# stage 1: the official docker-in-docker image
+FROM ${DIND_IMAGE} AS dind
+
+# stage 2: our RStudio image
+FROM ${BASE_IMAGE}
+
+LABEL org.opencontainers.image.title="rnaseq-nets-dind" \
+      org.opencontainers.image.description="rnaseq-nets image with the Docker Engine taken from the official docker:dind image (docker-in-docker, no socket sharing)"
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# --- OS utilities that dockerd needs (not Docker itself) -------------------
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        iptables \
+        iproute2 \
+        kmod \
+        xz-utils \
+        pigz \
+        e2fsprogs \
+        xfsprogs \
+        dmsetup \
+        fuse-overlayfs \
+        uidmap \
+        openssl \
+    && rm -rf /var/lib/apt/lists/* \
+    && update-alternatives --set iptables /usr/sbin/iptables-legacy || true \
+    && update-alternatives --set ip6tables /usr/sbin/ip6tables-legacy || true
+
+# --- the engine itself, straight from docker:dind --------------------------
+# /usr/local/bin  : docker, dockerd, containerd, runc, docker-init,
+#                   docker-proxy, ctr, the `dind` helper, dockerd-entrypoint.sh
+# /usr/local/libexec/docker/cli-plugins : buildx, compose
+COPY --from=dind /usr/local/bin/ /usr/local/bin/
+COPY --from=dind /usr/local/libexec/ /usr/local/libexec/
+
+# same users/groups the official image relies on
+RUN groupadd -f docker \
+    && usermod -aG docker rstudio \
+    && (getent passwd dockremap >/dev/null || useradd -r -s /usr/sbin/nologin dockremap) \
+    && (grep -q '^dockremap:' /etc/subuid || echo 'dockremap:231072:65536' >> /etc/subuid) \
+    && (grep -q '^dockremap:' /etc/subgid || echo 'dockremap:231072:65536' >> /etc/subgid) \
+    && mkdir -p /var/lib/docker /var/log \
+    && docker --version && dockerd --version
+
+# only the local unix socket is used, no TLS certificates to generate
+ENV DOCKER_TLS_CERTDIR="" \
+    DOCKER_HOST=unix:///var/run/docker.sock
+
+# inner images/volumes live here; declared as a volume so that the (slow)
+# copy-on-write layer is not used for image storage
+VOLUME /var/lib/docker
+
+COPY docker/entrypoint-dind.sh /usr/local/bin/entrypoint-dind.sh
+RUN chmod +x /usr/local/bin/entrypoint-dind.sh
+
+WORKDIR /sharedFolder
+EXPOSE 8787
+
+ENTRYPOINT ["/usr/local/bin/entrypoint-dind.sh"]
+CMD ["/init"]

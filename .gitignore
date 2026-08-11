@@ -1,0 +1,12 @@
+.Rproj.user/
+.Rhistory
+.RData
+.Ruserdata
+*.Rproj
+.DS_Store
+Thumbs.db
+# outputs produced during the tutorial
+results/
+figures/
+*.rds
+*.RDS

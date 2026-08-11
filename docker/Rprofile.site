@@ -1,0 +1,7 @@
+## Site-wide R profile for the tutorial image.
+## Makes every new R session start inside the folder shared from the host.
+local({
+  if (dir.exists("/sharedFolder") && interactive()) {
+    try(setwd("/sharedFolder"), silent = TRUE)
+  }
+})

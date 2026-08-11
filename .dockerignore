@@ -1,0 +1,13 @@
+# only docker/ and the Dockerfiles are needed in the build context
+.git
+.github
+data
+scripts
+*.md
+start.sh
+start.ps1
+start.bat
+start_macos.command
+.Rproj.user
+.Rhistory
+.RData
