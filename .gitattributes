@@ -1,0 +1,27 @@
+# Line ending normalisation. Required: without it, on Windows the .sh scripts end
+# up in the repository with CRLF and inside the container they fail with
+# "bad interpreter: /usr/bin/env bash^M".
+* text=auto eol=lf
+
+# these MUST stay LF (they run inside the Linux container)
+*.sh        text eol=lf
+*.command   text eol=lf
+*.R         text eol=lf
+*.conf      text eol=lf
+*.yml       text eol=lf
+*.tsv       text eol=lf
+Dockerfile      text eol=lf
+Dockerfile.*    text eol=lf
+Rprofile.site   text eol=lf
+
+# these MUST stay CRLF (they run on Windows)
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+
+# binaries: never touch
+*.png binary
+*.jpg binary
+*.pdf binary
+*.gz  binary
+*.zip binary
+*.rds binary

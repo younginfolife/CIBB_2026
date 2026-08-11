@@ -77,12 +77,12 @@ function Get-Conf {
     return $Default
 }
 
-$ImageRepo = Get-Conf "IMAGE_REPO" "ghcr.io/reproduciblebioinformatics/rnaseq-nets"
+$ImageRepo = Get-Conf "IMAGE_REPO" "ghcr.io/younginfolife/cibb_2026"
 $TagStd    = Get-Conf "TAG_STD"    "latest"
 $TagDind   = Get-Conf "TAG_DIND"   "dind"
 $RVersion  = Get-Conf "R_VERSION"  "4.6.1"
 $DindImage = Get-Conf "DIND_IMAGE" "docker:29-dind"
-$ContainerName = if ($Dind) { "rnaseq-nets-dind" } else { "rnaseq-nets" }
+$ContainerName = if ($Dind) { "cibb-2026-dind" } else { "cibb-2026" }
 
 if ($Image -eq "") {
     $Image = if ($Dind) { "${ImageRepo}:${TagDind}" } else { "${ImageRepo}:${TagStd}" }
@@ -223,7 +223,7 @@ if ($Build) {
 $runArgs = @(
     "run", "-d",
     "--name", $ContainerName,
-    "--hostname", "rnaseq-nets",
+    "--hostname", "cibb-2026",
     "-p", "127.0.0.1:${Port}:8787",
     "-e", "DISABLE_AUTH=true",
     "-e", "ROOT=true",

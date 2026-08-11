@@ -64,10 +64,10 @@ if [ -z "$CONF_IMAGE_REPO" ] && command -v git >/dev/null 2>&1; then
     fi
 fi
 
-IMAGE_REPO="${IMAGE_REPO:-${CONF_IMAGE_REPO:-ghcr.io/reproduciblebioinformatics/rnaseq-nets}}"
+IMAGE_REPO="${IMAGE_REPO:-${CONF_IMAGE_REPO:-ghcr.io/younginfolife/cibb_2026}}"
 TAG_STD="${TAG_STD:-${CONF_TAG_STD:-latest}}"
 TAG_DIND="${TAG_DIND:-${CONF_TAG_DIND:-dind}}"
-CONTAINER_NAME="${CONTAINER_NAME:-rnaseq-nets}"
+CONTAINER_NAME="${CONTAINER_NAME:-cibb-2026}"
 PORT="${PORT:-8888}"
 MIN_FREE_GB="${MIN_FREE_GB:-25}"
 R_VERSION="${R_VERSION:-${CONF_R_VERSION:-4.6.1}}"
@@ -255,7 +255,7 @@ fi
 RUN_ARGS=(
     -d
     --name "$CONTAINER_NAME"
-    --hostname rnaseq-nets
+    --hostname cibb-2026
     -p "127.0.0.1:${PORT}:8787"
     -e DISABLE_AUTH=true
     -e ROOT=true

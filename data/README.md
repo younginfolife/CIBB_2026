@@ -1,15 +1,18 @@
 # data
 
-Datasets of the tutorial go here. This folder is visible inside the container
-as `/sharedFolder/data`, so from RStudio:
+This folder is visible inside the container as `/sharedFolder/data` and is
+already the RStudio working directory, so relative paths work:
 
 ```r
-counts <- read.delim("data/counts.txt", row.names = 1, check.names = FALSE)
+counts <- read.delim("data/TestData/Data/insilico_size100_1_multifactorial.tsv",
+                     check.names = FALSE)
 ```
 
-Notes:
+Contents:
 
-* files larger than 100 MB cannot be pushed to GitHub: use Git LFS, a Zenodo /
-  Drive link, or ask students to download them separately;
-* keep the file names free of spaces and accents;
-* do not commit intermediate results here, only the input data.
+* `TestData/` — tutorial data and the corresponding gold standards
+* `ValidationData/` — validation data and the corresponding gold standards
+
+Notes for adding data: files above 100 MB cannot be pushed to GitHub, use Git LFS
+or an external link (Zenodo, Drive). Avoid spaces and accents in file and folder
+names. Do not commit intermediate results here, only input data.
