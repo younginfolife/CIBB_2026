@@ -66,7 +66,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         python3-pip \
         python3-venv \
     && rm -rf /var/lib/apt/lists/*
+# --- Python environment for metrics.py -------------------------------------
+ENV VIRTUAL_ENV=/opt/rnaseq-python
 
+RUN python3 -m venv ${VIRTUAL_ENV} \
+    && ${VIRTUAL_ENV}/bin/python -m pip install --no-cache-dir --upgrade pip \
+    && ${VIRTUAL_ENV}/bin/python -m pip install --no-cache-dir numpy pandas \
+    && ${VIRTUAL_ENV}/bin/python -c "import numpy, pandas; print('Python dependencies OK')"
+
+ENV PATH="${VIRTUAL_ENV}/bin:${PATH}"
 # --- R packages ------------------------------------------------------------
 COPY docker/install_packages.R /tmp/install_packages.R
 RUN Rscript /tmp/install_packages.R && rm -rf /tmp/* /var/tmp/*
