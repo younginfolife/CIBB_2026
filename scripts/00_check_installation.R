@@ -6,7 +6,7 @@
 
 preprocessing <- c(
   "DESeq2", "edgeR", "limma", "sva", "RUVSeq", "EDASeq",
-  "matrixStats", "data.table", "tidyverse"
+  "matrixStats", "data.table", "tidyverse", "ggrepel"
 )
 
 reverse_engineering <- c(
