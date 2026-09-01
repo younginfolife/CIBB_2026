@@ -1,18 +1,20 @@
 ---
-title: "Transcriptomics Data Analysis - Part 2"
-author: "Davide Bressan"
+title: "Reverse Engineering of Gene Regulatory Networks"
+author: "Dora Tortarolo, Grete Francesca Privitera, Roberto Pagliarini "
 date: "`r Sys.Date()`"
 output:
-  pdf_document: default
   html_document: default
+  pdf_document: default
 ---
 
 
-This is the second part of the webinar on "Transcriptomics Data Analysis" organised for the 2nd edition of the international BioHackathon of the Bioinformatics Italian Society (BITS) - 2026.
+This is the tutorial on *Reverse Engineering of Gene Regulatory Networks*: a hands-on tutorial on inferring gene regulatory networks from transcriptomic data, covering the full analytical workflow from data preprocessing to network evaluation.
+
+This tutorial is organized by Young InfoLife in collaboration with the conference CIBB 2026.
 
 ## Introduction
 
-In this second part of the tutorial we will perform some basic exploratory data analysis and learn how to normalize the **count** matrix.
+In this tutorial we will perform some basic exploratory data analysis and learn how to normalize the **count** matrix.
 
 - The count matrix is a table where rows represent genes and columns represent samples. 
 - Each entry in the matrix contains the number of reads that have been mapped to a particular gene in a specific sample.
