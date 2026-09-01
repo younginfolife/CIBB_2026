@@ -300,50 +300,50 @@ evaluate_network(A_glasso, G_bin)
 
 evaluate_network(A_mi, G_bin)
 # Avvia metrics.py sulle tre reti
-metrics_script <- "/sharedFolder/scripts/metrics.py"
-output_dir <- "/sharedFolder/data/metrics_input"
+#metrics_script <- "/sharedFolder/scripts/metrics.py"
+#output_dir <- "/sharedFolder/data/metrics_input"
 
-dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+#dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
 
 # Forza gli stessi nomi dei geni su tutte le matrici
-rownames(G_bin) <- common_genes
-colnames(G_bin) <- common_genes
+#rownames(G_bin) <- common_genes
+#colnames(G_bin) <- common_genes
 
-networks <- list(
-  A_cor = A_cor,
-  A_glasso = A_glasso,
-  A_mi = A_mi
-)
+#networks <- list(
+#  A_cor = A_cor,
+#  A_glasso = A_glasso,
+#  A_mi = A_mi
+#)
 
-true_file <- file.path(output_dir, "G_bin.csv")
-write.csv(G_bin, true_file)
+#true_file <- file.path(output_dir, "G_bin.csv")
+#write.csv(G_bin, true_file)
 
-for (network_name in names(networks)) {
-  adjacency <- as.matrix(networks[[network_name]])
+#for (network_name in names(networks)) {
+#  adjacency <- as.matrix(networks[[network_name]])
   
-  rownames(adjacency) <- common_genes
-  colnames(adjacency) <- common_genes
+#  rownames(adjacency) <- common_genes
+#  colnames(adjacency) <- common_genes
   
-  estimated_file <- file.path(
-    output_dir,
-    paste0(network_name, ".csv")
-  )
+#  estimated_file <- file.path(
+#    output_dir,
+#    paste0(network_name, ".csv")
+#  )
   
-  write.csv(adjacency, estimated_file)
+#  write.csv(adjacency, estimated_file)
   
-  cat("\n---", network_name, "---\n")
+#  cat("\n---", network_name, "---\n")
   
-  python_output <- system2(
-    "python3",
-    args = c(
-      metrics_script,
-      "--est", estimated_file,
-      "--true", true_file
-    ),
-    stdout = TRUE,
-    stderr = TRUE
-  )
+#  python_output <- system2(
+#    "python3",
+#    args = c(
+#      metrics_script,
+#      "--est", estimated_file,
+#      "--true", true_file
+#    ),
+#    stdout = TRUE,
+#    stderr = TRUE
+#  )
   
-  cat(python_output, sep = "\n")
-  cat("\n")
-}
+#  cat(python_output, sep = "\n")
+#  cat("\n")
+#}
