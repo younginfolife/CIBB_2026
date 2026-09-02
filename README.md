@@ -1,3 +1,8 @@
+## Contacts
+- Roberto Pagliarini - roberto.pagliarini@uniud.it
+- Grete Francesca Privitera - grete.privitera@unict.it
+- Dora Tortarolo - dora.tortarolo@unito.it
+
 # CIBB 2026 — RNA-seq and network reverse engineering
 
 RStudio Server in a container, with everything needed to go from RNA-seq counts
